@@ -13,7 +13,6 @@ class CamadaEnlace:
         """
         self.enlaces = {}
         self.callback = None
-        self.buffer = bytearray()
         # Constrói um Enlace para cada linha serial
         for ip_outra_ponta, linha_serial in linhas_seriais.items():
             enlace = Enlace(linha_serial)
@@ -44,6 +43,7 @@ class Enlace:
     def __init__(self, linha_serial):
         self.linha_serial = linha_serial
         self.linha_serial.registrar_recebedor(self.__raw_recv)
+        self.buffer = bytearray()
 
     def registrar_recebedor(self, callback):
         self.callback = callback
@@ -87,32 +87,41 @@ class Enlace:
         # apenas pedaços de um quadro, ou um pedaço de quadro seguido de um
         # pedaço de outro, ou vários quadros de uma vez só.
         def _callback(data):
+            if data == b'':
+                return
+
             data = data.replace(b'\xdb\xdd', b'\xdb')
             data = data.replace(b'\xdb\xdc', b'\xc0')
-            self.callback(data)
-            self.buffer = bytearray()
+            try:
+                self.callback(bytes(data))
+            except:
+                pass
+            finally:
+                self.buffer = bytearray()
 
-        if dados == b'0':
+        if dados == b'':
             return
 
         dados = bytearray(dados)
 
         if dados == bytearray(0xc0):
-            if self.buffer != b'': # 0xc0 eh final
-                self._callback(dados)
-
-            else: # 0xc0 eh começo
-                return
-
-        else:
-            if 0xc0 in dados:
-                start_flag = False
+            if self.buffer != b'': # 0xc0 eh final de msg
                 for b in dados:
                     self.buffer.append(b)
 
-                    if b == 0xc0 and start_flag:
-                        start_flag = False
+                _callback(self.buffer)
 
-                    elif b == 0xc0 and not start_flag:
-                        self._callback(self.buffer)
-                        start_flag = True
+            else: # 0xc0 eh começo de msg
+                return
+
+        else:
+
+            if dados[0] == 0xc0 and not self.buffer:
+                dados.pop(0)
+
+            for b in dados:
+                self.buffer.append(b)
+
+                if b == 0xc0:
+                    self.buffer.pop()
+                    _callback(self.buffer)
