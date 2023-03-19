@@ -13,6 +13,7 @@ class CamadaEnlace:
         """
         self.enlaces = {}
         self.callback = None
+        self.buffer = bytearray()
         # Constrói um Enlace para cada linha serial
         for ip_outra_ponta, linha_serial in linhas_seriais.items():
             enlace = Enlace(linha_serial)
@@ -51,7 +52,31 @@ class Enlace:
         # TODO: Preencha aqui com o código para enviar o datagrama pela linha
         # serial, fazendo corretamente a delimitação de quadros e o escape de
         # sequências especiais, de acordo com o protocolo CamadaEnlace (RFC 1055).
-        pass
+        datagrama = bytearray(datagrama)
+
+        if 0xdb in datagrama:
+            rep_lst = [0xdb, 0xdd]
+            rep_idxs = [i if item == 0xdb else None for i, item in enumerate(datagrama)]
+            for i in rep_idxs:
+                if i is not None:
+                    datagrama.pop(i)
+                    datagrama.insert(i, rep_lst[1])
+                    datagrama.insert(i, rep_lst[0])
+
+        if 0xc0 in datagrama:
+            rep_lst = [0xdb, 0xdc]
+            rep_idxs = [i if item == 0xc0 else None for i, item in enumerate(datagrama)]
+            for i in rep_idxs:
+                if i is not None:
+                    datagrama.pop(i)
+                    datagrama.insert(i, rep_lst[1])
+                    datagrama.insert(i, rep_lst[0])
+
+        # envelopa
+        datagrama.insert(0, 0xc0)
+        datagrama.append(0xc0)
+        datagrama = bytes(datagrama)
+        self.linha_serial.enviar(datagrama)
 
     def __raw_recv(self, dados):
         # TODO: Preencha aqui com o código para receber dados da linha serial.
@@ -61,4 +86,33 @@ class Enlace:
         # vir quebrado de várias formas diferentes - por exemplo, podem vir
         # apenas pedaços de um quadro, ou um pedaço de quadro seguido de um
         # pedaço de outro, ou vários quadros de uma vez só.
-        pass
+        def _callback(data):
+            data = data.replace(b'\xdb\xdd', b'\xdb')
+            data = data.replace(b'\xdb\xdc', b'\xc0')
+            self.callback(data)
+            self.buffer = bytearray()
+
+        if dados == b'0':
+            return
+
+        dados = bytearray(dados)
+
+        if dados == bytearray(0xc0):
+            if self.buffer != b'': # 0xc0 eh final
+                self._callback(dados)
+
+            else: # 0xc0 eh começo
+                return
+
+        else:
+            if 0xc0 in dados:
+                start_flag = False
+                for b in dados:
+                    self.buffer.append(b)
+
+                    if b == 0xc0 and start_flag:
+                        start_flag = False
+
+                    elif b == 0xc0 and not start_flag:
+                        self._callback(self.buffer)
+                        start_flag = True
